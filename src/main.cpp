@@ -10,8 +10,10 @@
 #include <IRsend.h>
 #include <ir_Gree.h>
 #include "Ticker.h"
+#include <LittleFS.h>
+#include "..\lib\blinker-library-master\src\modules\ArduinoJson\ArduinoJson.h"
 
-char auth[] = "29455e60830e";
+// char auth[] = "29455e60830e";
 // char ssid[] = "Dell";
 // char pswd[] = "1136759016";
 
@@ -36,6 +38,10 @@ BlinkerSlider Slider2("fengsu");
 Ticker timer1;           // 建立Ticker用于实现定时功能
 bool screen_change_flag; // 屏幕刷新标志
 float humi_read, temp_read;
+char auth[20] = "";
+char ssid[20] = "";
+char pswd[20] = "";
+bool shouldSaveConfig = false;
 
 void dataStorage()
 {
@@ -149,34 +155,145 @@ void screen_change()
   screen_change_flag = 1;
 }
 
+void init_littlefs()
+{
+  if (LittleFS.begin())
+  {
+    // if file not exists
+    if (!(LittleFS.exists("/AC.json")))
+    {
+      LittleFS.open("/AC.json", "w+");
+      return;
+    }
+
+    File configFile = LittleFS.open("/AC.json", "r");
+    if (configFile)
+    {
+      String a;
+      StaticJsonDocument<200> doc;
+      while (configFile.available())
+      {
+        a = configFile.readString();
+      }
+      Serial.println("");
+      Serial.println(a);
+      Serial.println(a);
+      configFile.close();
+      deserializeJson(doc, a);
+
+      if (doc.containsKey("auth"))
+      {
+        strcpy(auth, doc["auth"]);
+      }
+      if (doc.containsKey("ssid"))
+      {
+        strcpy(ssid, doc["ssid"]);
+      }
+      if (doc.containsKey("pswd"))
+      {
+        strcpy(pswd, doc["pswd"]);
+      }
+    }
+    configFile.close();
+  }
+  else
+  {
+    Serial.println("LittleFS mount failed");
+    return;
+  }
+}
+
+bool saveConfig()
+{
+  File configFile = LittleFS.open("/AC.json", "r");
+  if (!configFile)
+  {
+    Serial.println("failed to open config file for writing");
+    return false;
+  }
+  configFile.close();
+  StaticJsonDocument<200> doc;
+  doc["auth"] = auth;
+  doc["ssid"] = ssid;
+  doc["pswd"] = pswd;
+  File fileSaved = LittleFS.open("/AC.json", "w");
+  serializeJson(doc, fileSaved);
+  serializeJson(doc, Serial);
+  Serial.println(fileSaved);
+  fileSaved.close();
+  // end save
+  return true;
+}
+// 保存wifi信息时的回调函数
+void STACallback()
+{
+  if (LittleFS.begin())
+  {
+    delay(1000);
+    LittleFS.remove("/AC.json");
+
+    LittleFS.end();
+    delay(1000);
+  }
+  // wifiManager.resetSettings();
+  // ESP.reset();
+  digitalWrite(LED_BUILTIN, HIGH);
+  Serial.println("connected wifi !!!");
+  shouldSaveConfig = true;
+}
+// 设置AP模式时的回调函数
+void APCallback(WiFiManager *myWiFiManager)
+{
+  digitalWrite(LED_BUILTIN, LOW);
+  Serial.println("NO connected !!!");
+}
+
 void setup()
 {
   pinMode(ir_out_pin, OUTPUT);
   digitalWrite(ir_out_pin, LOW);
   pinMode(led, OUTPUT);
   digitalWrite(led, HIGH);
-  Serial.begin(115200);
-  WiFiManager wifiManager;
-  // wifiManager.resetSettings(); //reset saved settings
-  wifiManager.autoConnect("kongtiaozhushou");
-  // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
-  if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS))
-  {
-    Serial.println(F("SSD1306 allocation failed"));
-    for (;;)
-      ; // Don't proceed, loop forever
-  }
-  while (myAHT20.begin() != true)
-  {
-    Serial.println(F("AHT20 not connected or fail to load calibration coefficient")); //(F()) save string to flash & keeps dynamic memory free
-    delay(5000);
-  }
-  BLINKER_DEBUG.stream(Serial);
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, LOW);
-  String ssid = wifiManager.getWiFiSSID();
-  String pswd = wifiManager.getWiFiPass();
-  Blinker.begin(auth, ssid.c_str(), pswd.c_str());
+  Serial.begin(115200);
+  init_littlefs();
+  WiFiManager wifiManager;
+  WiFiManagerParameter blinker_auth("auth", "blinker_auth(12位)", "", 13);
+  WiFiManagerParameter host_hint("<small> Blinker_auth <br></small><br><br>");
+  WiFiManagerParameter p_lineBreak_notext("<p></p>");
+  wifiManager.setSaveConfigCallback(STACallback);
+  wifiManager.setAPCallback(APCallback);
+
+  wifiManager.addParameter(&p_lineBreak_notext);
+  // wifiManager.addParameter(&host_hint);
+  wifiManager.addParameter(&blinker_auth);
+
+  // wifiManager.resetSettings(); //reset saved settings
+  if (!wifiManager.autoConnect("空调助手"))
+  {
+    // reset and try again, or maybe put it to deep sleep
+    ESP.reset();
+    delay(5000);
+  }
+  // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
+  // if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS))
+  // {
+  //   Serial.println(F("SSD1306 allocation failed"));
+  //   for (;;)
+  //     ; // Don't proceed, loop forever
+  // }
+  // while (myAHT20.begin() != true)
+  // {
+  //   Serial.println(F("AHT20 not connected or fail to load calibration coefficient")); //(F()) save string to flash & keeps dynamic memory free
+  //   delay(5000);
+  // }
+  BLINKER_DEBUG.stream(Serial);
+
+  Serial.println(auth);
+  Serial.println(ssid);
+  Serial.println(pswd);
+  Blinker.begin(auth, ssid, pswd);
   Blinker.attachData(dataRead);
   Button1.attach(button1_callback);
   Button2.attach(button2_callback);
@@ -184,6 +301,21 @@ void setup()
   Slider2.attach(slider2_callback);
   Blinker.attachDataStorage(dataStorage, 60, 1);
   timer1.attach(10, screen_change);
+
+  if (shouldSaveConfig)
+  {
+    int ssid_len = wifiManager.getWiFiSSID().length() + 1;
+    int pswd_len = wifiManager.getWiFiPass().length() + 1;
+    wifiManager.getWiFiSSID().toCharArray(ssid, ssid_len);
+    wifiManager.getWiFiPass().toCharArray(pswd, pswd_len);
+    Serial.println(wifiManager.getWiFiSSID());
+    Serial.println(wifiManager.getWiFiPass());
+    Serial.println(ssid);
+    Serial.println(pswd);
+    strcpy(auth, blinker_auth.getValue());
+    saveConfig();
+    ESP.reset();
+  }
 }
 
 void loop()
@@ -217,7 +349,12 @@ void loop()
       Serial.print(F("Failed to read - reset: "));
       Serial.println(myAHT20.softReset()); // reset 1-success, 0-failed
     }
+    Serial.println(auth);
+    Serial.println(ssid);
+    Serial.println(pswd);
     screen_change_flag = 0;
   }
+  if (WiFi.status() == WL_CONNECTED)
+    digitalWrite(LED_BUILTIN, HIGH);
   Blinker.run();
 }
