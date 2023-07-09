@@ -6,16 +6,7 @@
 #include <AHT10.h>
 #define BLINKER_WIFI
 #include <Blinker.h>
-#include <WiFiManager.h>
-#include <IRsend.h>
-#include <ir_Gree.h>
-#include "Ticker.h"
-#include <LittleFS.h>
-#include "..\lib\blinker-library-master\src\modules\ArduinoJson\ArduinoJson.h"
-
-// char auth[] = "29455e60830e";
-// char ssid[] = "Dell";
-// char pswd[] = "1136759016";
+#include <main.h>
 
 #define SCREEN_WIDTH 128    // OLED display width, in pixels
 #define SCREEN_HEIGHT 32    // OLED display height, in pixels
@@ -33,15 +24,14 @@ IRGreeAC ac(ir_out_pin); // Set the GPIO to be used for sending messages.
 String show;
 BlinkerButton Button1("BUTTON_1");
 BlinkerButton Button2("BUTTON_2");
+BlinkerButton Button3("BUTTON_3");
+BlinkerButton Button4("BUTTON_4");
 BlinkerSlider Slider1("temp");
 BlinkerSlider Slider2("fengsu");
-Ticker timer1;           // 建立Ticker用于实现定时功能
-bool screen_change_flag; // 屏幕刷新标志
+Ticker timer1, timer2;                    // 建立Ticker用于实现定时功能
+extern bool screen_change_flag, dht_flag; // 屏幕刷新标志,dht刷新标志
 float humi_read, temp_read;
-char auth[20] = "";
-char ssid[20] = "";
-char pswd[20] = "";
-bool shouldSaveConfig = false;
+WiFiManager wifiManager;
 
 void dataStorage()
 {
@@ -49,23 +39,17 @@ void dataStorage()
   Blinker.dataStorage("temp", temp_read);
 }
 
-void printState()
-{
-  // Display the settings.
-  Serial.println("GREE A/C remote is in the following state:");
-  Serial.printf("  %s\n", ac.toString().c_str());
-  // Display the encoded IR sequence.
-  unsigned char *ir_code = ac.getRaw();
-  Serial.print("IR Code: 0x");
-  for (uint8_t i = 0; i < kGreeStateLength; i++)
-    Serial.printf("%02X", ir_code[i]);
-  Serial.println();
-}
-
 void dataRead(const String &data)
 {
   BLINKER_LOG("Blinker readString: ", data);
   show = data;
+  int flag = data.toInt();
+  if (flag == 1)
+  {
+    wifiManager.resetSettings();
+    ESP.reset();
+    Blinker.print("resetSettings and reset ESP");
+  }
   Blinker.vibrate();
   uint32_t BlinkerTime = millis();
   Blinker.print("millis", BlinkerTime);
@@ -114,21 +98,61 @@ void button2_callback(const String &state)
   {
     digitalWrite(led, LOW);
     BLINKER_LOG("Toggle on!");
-    // Button2.icon("icon_1");
     Button2.color("#0090f2");
     Button2.text("NO");
-    // Button1.text("Your button name", "describe");
     Button2.print("on");
   }
   else
   {
     digitalWrite(led, HIGH);
     BLINKER_LOG("Toggle off!");
-    // Button2.icon("icon_1");
     Button2.color("#949494");
     Button2.text("OFF");
-    // Button1.text("Your button name", "describe");
     Button2.print("off");
+  }
+}
+
+void button3_callback(const String &state)
+{
+  BLINKER_LOG("get button state: ", state);
+  if (state == BLINKER_CMD_ON)
+  {
+    ac.setSwingVertical(true, kGreeSwingAuto);
+    BLINKER_LOG("Toggle on!");
+    Button3.color("#0090f2");
+    Button3.text("NO");
+    Button3.print("on");
+  }
+  else
+  {
+    ac.setSwingVertical(false, kGreeSwingAuto);
+    BLINKER_LOG("Toggle off!");
+    Button3.color("#949494");
+    Button3.text("OFF");
+    Button3.print("off");
+  }
+  ac.send();
+  printState();
+}
+
+void button4_callback(const String &state)
+{
+  BLINKER_LOG("get button state: ", state);
+  if (state == BLINKER_CMD_ON)
+  {
+    screen_power_flag = 1;
+    BLINKER_LOG("Toggle on!");
+    Button4.color("#0090f2");
+    Button4.text("NO");
+    Button4.print("on");
+  }
+  else
+  {
+    screen_power_flag = 0;
+    BLINKER_LOG("Toggle off!");
+    Button4.color("#949494");
+    Button4.text("OFF");
+    Button4.print("off");
   }
 }
 
@@ -150,104 +174,6 @@ void slider2_callback(int32_t fengsu)
   printState();
 }
 
-void screen_change()
-{
-  screen_change_flag = 1;
-}
-
-void init_littlefs()
-{
-  if (LittleFS.begin())
-  {
-    // if file not exists
-    if (!(LittleFS.exists("/AC.json")))
-    {
-      LittleFS.open("/AC.json", "w+");
-      return;
-    }
-
-    File configFile = LittleFS.open("/AC.json", "r");
-    if (configFile)
-    {
-      String a;
-      StaticJsonDocument<200> doc;
-      while (configFile.available())
-      {
-        a = configFile.readString();
-      }
-      Serial.println("");
-      Serial.println(a);
-      Serial.println(a);
-      configFile.close();
-      deserializeJson(doc, a);
-
-      if (doc.containsKey("auth"))
-      {
-        strcpy(auth, doc["auth"]);
-      }
-      if (doc.containsKey("ssid"))
-      {
-        strcpy(ssid, doc["ssid"]);
-      }
-      if (doc.containsKey("pswd"))
-      {
-        strcpy(pswd, doc["pswd"]);
-      }
-    }
-    configFile.close();
-  }
-  else
-  {
-    Serial.println("LittleFS mount failed");
-    return;
-  }
-}
-
-bool saveConfig()
-{
-  File configFile = LittleFS.open("/AC.json", "r");
-  if (!configFile)
-  {
-    Serial.println("failed to open config file for writing");
-    return false;
-  }
-  configFile.close();
-  StaticJsonDocument<200> doc;
-  doc["auth"] = auth;
-  doc["ssid"] = ssid;
-  doc["pswd"] = pswd;
-  File fileSaved = LittleFS.open("/AC.json", "w");
-  serializeJson(doc, fileSaved);
-  serializeJson(doc, Serial);
-  Serial.println(fileSaved);
-  fileSaved.close();
-  // end save
-  return true;
-}
-// 保存wifi信息时的回调函数
-void STACallback()
-{
-  if (LittleFS.begin())
-  {
-    delay(1000);
-    LittleFS.remove("/AC.json");
-
-    LittleFS.end();
-    delay(1000);
-  }
-  // wifiManager.resetSettings();
-  // ESP.reset();
-  digitalWrite(LED_BUILTIN, HIGH);
-  Serial.println("connected wifi !!!");
-  shouldSaveConfig = true;
-}
-// 设置AP模式时的回调函数
-void APCallback(WiFiManager *myWiFiManager)
-{
-  digitalWrite(LED_BUILTIN, LOW);
-  Serial.println("NO connected !!!");
-}
-
 void setup()
 {
   pinMode(ir_out_pin, OUTPUT);
@@ -258,13 +184,16 @@ void setup()
   digitalWrite(LED_BUILTIN, LOW);
   Serial.begin(115200);
   init_littlefs();
-  WiFiManager wifiManager;
+
   WiFiManagerParameter blinker_auth("auth", "blinker_auth(12位)", "", 13);
   WiFiManagerParameter host_hint("<small> Blinker_auth <br></small><br><br>");
   WiFiManagerParameter p_lineBreak_notext("<p></p>");
   wifiManager.setSaveConfigCallback(STACallback);
   wifiManager.setAPCallback(APCallback);
-
+  // 配置连接超时，单位秒
+  wifiManager.setConnectTimeout(10);
+  // 设置 如果配置错误的ssid或者密码 退出配置模式
+  wifiManager.setBreakAfterConfig(true);
   wifiManager.addParameter(&p_lineBreak_notext);
   // wifiManager.addParameter(&host_hint);
   wifiManager.addParameter(&blinker_auth);
@@ -276,32 +205,6 @@ void setup()
     ESP.reset();
     delay(5000);
   }
-  // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
-  // if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS))
-  // {
-  //   Serial.println(F("SSD1306 allocation failed"));
-  //   for (;;)
-  //     ; // Don't proceed, loop forever
-  // }
-  // while (myAHT20.begin() != true)
-  // {
-  //   Serial.println(F("AHT20 not connected or fail to load calibration coefficient")); //(F()) save string to flash & keeps dynamic memory free
-  //   delay(5000);
-  // }
-  BLINKER_DEBUG.stream(Serial);
-
-  Serial.println(auth);
-  Serial.println(ssid);
-  Serial.println(pswd);
-  Blinker.begin(auth, ssid, pswd);
-  Blinker.attachData(dataRead);
-  Button1.attach(button1_callback);
-  Button2.attach(button2_callback);
-  Slider1.attach(slider1_callback);
-  Slider2.attach(slider2_callback);
-  Blinker.attachDataStorage(dataStorage, 60, 1);
-  timer1.attach(10, screen_change);
-
   if (shouldSaveConfig)
   {
     int ssid_len = wifiManager.getWiFiSSID().length() + 1;
@@ -316,45 +219,99 @@ void setup()
     saveConfig();
     ESP.reset();
   }
+  // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
+  if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS))
+  {
+    Serial.println(F("SSD1306 allocation failed"));
+    for (;;)
+      ; // Don't proceed, loop forever
+  }
+  while (myAHT20.begin() != true)
+  {
+    Serial.println(F("AHT20 not connected or fail to load calibration coefficient")); //(F()) save string to flash & keeps dynamic memory free
+    delay(5000);
+  }
+  BLINKER_DEBUG.stream(Serial);
+  // BLINKER_DEBUG.debugAll();
+
+  Serial.println(auth);
+  Serial.println(ssid);
+  Serial.println(pswd);
+  Blinker.begin(auth, ssid, pswd);
+  Blinker.attachData(dataRead);
+  Button1.attach(button1_callback);
+  Button2.attach(button2_callback);
+  Button3.attach(button3_callback);
+  Button4.attach(button4_callback);
+  Slider1.attach(slider1_callback);
+  Slider2.attach(slider2_callback);
+  Blinker.attachDataStorage(dataStorage, 60, 1);
+  timer1.attach(5, screen_change);
+  timer2.attach(10, dht_flag_change);
 }
 
 void loop()
 {
-  if (screen_change_flag)
+  if (screen_power_flag)
   {
-    readStatus = myAHT20.readRawData(); // read 6 bytes from AHT10 over I2C
-    if (readStatus != AHT10_ERROR)
+    if (screen_change_flag)
     {
-      Serial.print(F("Temperature: "));
-      Serial.print(myAHT20.readTemperature(AHT10_USE_READ_DATA));
-      Serial.println(F(" +-0.3C"));
-      Serial.print(F("Humidity...: "));
-      Serial.print(myAHT20.readHumidity(AHT10_USE_READ_DATA));
-      Serial.println(F(" +-2%"));
-      display.clearDisplay();
-      display.setTextSize(1);              // Normal 1:1 pixel scale
-      display.setTextColor(SSD1306_WHITE); // Draw white text
-      display.setCursor(0, 0);             // Start at top-left corner
-      display.println(show);
-      display.print(F("Temperature: "));
-      display.println(myAHT20.readTemperature(AHT10_USE_READ_DATA));
-      display.print(F("Humidity: "));
-      display.println(myAHT20.readHumidity(AHT10_USE_READ_DATA));
-      display.display();
-      humi_read = myAHT20.readHumidity(AHT10_USE_READ_DATA);
-      temp_read = myAHT20.readTemperature(AHT10_USE_READ_DATA);
+      readStatus = myAHT20.readRawData(); // read 6 bytes from AHT10 over I2C
+      if (readStatus != AHT10_ERROR)
+      {
+        Serial.print(F("Temperature: "));
+        Serial.print(myAHT20.readTemperature(AHT10_USE_READ_DATA));
+        Serial.println(F(" +-0.3C"));
+        Serial.print(F("Humidity...: "));
+        Serial.print(myAHT20.readHumidity(AHT10_USE_READ_DATA));
+        Serial.println(F(" +-2%"));
+        display.clearDisplay();
+        display.setTextSize(1);              // Normal 1:1 pixel scale
+        display.setTextColor(SSD1306_WHITE); // Draw white text
+        display.setCursor(0, 0);             // Start at top-left corner
+        display.println(show);
+        display.print(F("Temperature: "));
+        display.println(myAHT20.readTemperature(AHT10_USE_READ_DATA));
+        display.print(F("Humidity: "));
+        display.println(myAHT20.readHumidity(AHT10_USE_READ_DATA));
+        display.display();
+      }
+      else
+      {
+        Serial.print(F("Failed to read - reset: "));
+        Serial.println(myAHT20.softReset()); // reset 1-success, 0-failed
+      }
+      screen_change_flag = 0;
     }
-    else
-    {
-      Serial.print(F("Failed to read - reset: "));
-      Serial.println(myAHT20.softReset()); // reset 1-success, 0-failed
-    }
+  }
+  else
+  {
+    display.clearDisplay();
+    display.display();
+  }
+  if (dht_flag)
+  {
+    humi_read = myAHT20.readHumidity(AHT10_USE_READ_DATA);
+    temp_read = myAHT20.readTemperature(AHT10_USE_READ_DATA);
     Serial.println(auth);
     Serial.println(ssid);
     Serial.println(pswd);
-    screen_change_flag = 0;
+    // 检测blinker的auth值是否正确，正确blinker初始化成功，Blinker.init()值不会在一个循环内刷新，故放置在10s循环内
+    if (!Blinker.init())
+    {
+      wifiManager.resetSettings(); // reset saved settings
+      ESP.reset();
+    }
+    // 检测运行是否断网，WiFi.status()值不会立即刷新
+    if (WiFi.status() == WL_CONNECTED)
+      digitalWrite(LED_BUILTIN, HIGH);
+    else
+    {
+      digitalWrite(LED_BUILTIN, LOW);
+      // wifiManager.resetSettings(); // reset saved settings
+      // ESP.reset();
+    }
+    dht_flag = 0;
   }
-  if (WiFi.status() == WL_CONNECTED)
-    digitalWrite(LED_BUILTIN, HIGH);
   Blinker.run();
 }
